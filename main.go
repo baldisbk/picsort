@@ -44,11 +44,14 @@ func mainFunc() error {
 	pflag.Parse()
 	storageFilename := path.Join(*storage, LibraryFile)
 
-	logger, err := zap.NewDevelopment()
+	logcfg := zap.NewDevelopmentConfig()
+	logcfg.OutputPaths = []string{"log.log"}
+	logger, err := logcfg.Build()
 	if err != nil {
 		return xerrors.Errorf("logger: %w", err)
 	}
 	defer logger.Sync()
+	sl := logger.Sugar()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -83,11 +86,11 @@ func mainFunc() error {
 	// list files
 	input, errs := Walk(ctx, *storage, IncomingFolder)
 	for path, err := range errs {
-		fmt.Fprintf(stderr, "Error reading incoming %s: %#v\n", path, err)
+		sl.Errorf("Error reading incoming %s: %#v", path, err)
 	}
 	sorted, errs := Walk(ctx, *storage, SortedFolder)
 	for path, err := range errs {
-		fmt.Fprintf(stderr, "Error reading sorted %s: %#v\n", path, err)
+		sl.Errorf("Error reading sorted %s: %#v", path, err)
 	}
 
 	// process sorted files
@@ -98,11 +101,11 @@ func mainFunc() error {
 			newPath := path.Join(*storage, SortedFolder, rec.Path)
 			if old, ok := db.contents[hash]; ok {
 				if eq, err := CompareGroup(old.Path, newPath); err != nil {
-					fmt.Fprintf(stderr, "Error processing sorted: %#v\n", err)
+					sl.Errorf("Error processing sorted: %#v", err)
 				} else if eq {
-					fmt.Fprintf(stderr, "Duplicate: %s, %s\n", old.Path, newPath)
+					sl.Errorf("Duplicate: %s, %s", old.Path, newPath)
 				} else {
-					fmt.Fprintf(stderr, "Hash conflict: %s, %s\n", old.Path, newPath)
+					sl.Errorf("Hash conflict: %s, %s", old.Path, newPath)
 				}
 				continue
 			}
@@ -133,7 +136,7 @@ func mainFunc() error {
 		// check equality
 		eq, err := CompareGroup(filenames...)
 		if err != nil {
-			fmt.Fprintf(stderr, "Error comparing incoming: %#v\n", err)
+			sl.Errorf("Error comparing incoming: %#v", err)
 			continue
 		}
 		if !eq {
@@ -143,10 +146,10 @@ func mainFunc() error {
 			// deal with them and try again
 			for _, f := range files {
 				conflict++
-				if err := Move(
+				if err := Move(sl,
 					path.Join(*storage, IncomingFolder, f.Path),
 					path.Join(*storage, ConflictFolder, f.Path)); err != nil {
-					fmt.Fprintf(stderr, "Error moving: %#v\n", err)
+					sl.Errorf("Error moving: %#v", err)
 				}
 			}
 			continue
@@ -156,15 +159,15 @@ func mainFunc() error {
 		// remove all but first
 		for _, f := range files[1:] {
 			removed++
-			// if err := Del(
+			// if err := Del(sl,
 			// 	path.Join(*storage, IncomingFolder),
 			// 	path.Join(*storage, IncomingFolder, f.Path)); err != nil {
-			// 	fmt.Fprintf(stderr, "Error removing: %#v\n", err)
+			// 	sl.Errorf("Error removing: %#v", err)
 			// }
-			if err := Move(
+			if err := Move(sl,
 				path.Join(*storage, IncomingFolder, f.Path),
 				path.Join(*storage, TrashbinFolder, f.Path)); err != nil {
-				fmt.Fprintf(stderr, "Error removing: %#v\n", err)
+				sl.Errorf("Error removing: %#v", err)
 			}
 		}
 		file := files[0]
@@ -176,30 +179,30 @@ func mainFunc() error {
 				rec.Path,
 				path.Join(*storage, IncomingFolder, file.Path))
 			if err != nil {
-				fmt.Fprintf(stderr, "Error processing incoming: %#v\n", err)
+				sl.Errorf("Error processing incoming: %#v", err)
 				continue
 			}
 			if eq {
 				// proper duplicate
 				removed++
-				// if err := Del(
+				// if err := Del(sl,
 				// 	path.Join(*storage, IncomingFolder),
 				// 	path.Join(*storage, IncomingFolder, file.Path)); err != nil {
-				// 	fmt.Fprintf(stderr, "Error removing: %#v\n", err)
+				// 	sl.Errorf("Error removing: %#v", err)
 				// }
-				if err := Move(
+				if err := Move(sl,
 					path.Join(*storage, IncomingFolder, file.Path),
 					path.Join(*storage, TrashbinFolder, file.Path)); err != nil {
-					fmt.Fprintf(stderr, "Error removing: %#v\n", err)
+					sl.Errorf("Error removing: %#v", err)
 				}
 				continue
 			}
 			// hash conflict
 			conflict++
-			if err := Move(
+			if err := Move(sl,
 				path.Join(*storage, IncomingFolder, file.Path),
 				path.Join(*storage, ConflictFolder, file.Path)); err != nil {
-				fmt.Fprintf(stderr, "Error moving: %#v\n", err)
+				sl.Errorf("Error moving: %#v", err)
 			}
 			continue
 		}
@@ -208,10 +211,10 @@ func mainFunc() error {
 		if _, ok := db.index[file.TargetPath()]; ok {
 			// directory seen - move to duplicates
 			duplicates++
-			if err := Move(
+			if err := Move(sl,
 				path.Join(*storage, IncomingFolder, file.Path),
 				path.Join(*storage, DuplicateFolder, file.Path)); err != nil {
-				fmt.Fprintf(stderr, "Error moving: %#v\n", err)
+				sl.Errorf("Error moving: %#v", err)
 			}
 			continue
 		}
@@ -224,12 +227,12 @@ func mainFunc() error {
 				if os.IsNotExist(err) {
 					break
 				}
-				fmt.Fprintf(stderr, "Error stat new file: %#v\n", err)
+				sl.Errorf("Error stat new file: %#v", err)
 			}
 			dup++
 		}
 		newfiles++
-		Move(
+		Move(sl,
 			path.Join(*storage, IncomingFolder, file.Path),
 			name)
 		file.Path = name
