@@ -9,6 +9,7 @@ import (
 	"path"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
@@ -39,7 +40,12 @@ func main() {
 	}
 }
 
+var stdout *bufio.Writer
+
 func mainFunc() error {
+	stdout = bufio.NewWriter(os.Stdout)
+	defer stdout.Flush()
+
 	storage := pflag.StringP("storage", "s", ".", "Path to picture storage")
 	pflag.Parse()
 	storageFilename := path.Join(*storage, LibraryFile)
@@ -71,63 +77,93 @@ func mainFunc() error {
 			cancel()
 		}
 	}()
+	time.Sleep(10 * time.Second)
 
 	// load db
+	fmt.Fprintf(stdout, "Loading library...\n")
 	var db Database
 	if err := db.Read(storageFilename); err != nil {
 		return xerrors.Errorf("database: %w", err)
 	}
+	fmt.Fprintf(stdout, "Loaded %d entries\n", len(db.contents))
+	stdout.Flush()
 
-	stdout := bufio.NewWriter(os.Stdout)
-	defer stdout.Flush()
-	stderr := bufio.NewWriter(os.Stderr)
-	defer stderr.Flush()
+	defer func() {
+		fmt.Fprintf(stdout, "Sync db\n")
+		if err := db.Sync(storageFilename); err != nil {
+			sl.Errorf("Error sync database: %#v", err)
+		}
+	}()
 
 	// list files
-	input, errs := Walk(ctx, *storage, IncomingFolder)
+	input, total, errs := Walk(ctx, *storage, IncomingFolder, map[string]struct{}{})
 	for path, err := range errs {
-		sl.Errorf("Error reading incoming %s: %#v", path, err)
+		sl.Errorf("Error reading incoming %q: %#v", path, err)
 	}
-	sorted, errs := Walk(ctx, *storage, SortedFolder)
+	sorted, known, errs := Walk(ctx, *storage, SortedFolder, db.sorted)
 	for path, err := range errs {
-		sl.Errorf("Error reading sorted %s: %#v", path, err)
+		sl.Errorf("Error reading sorted %q: %#v", path, err)
 	}
 
 	// process sorted files
+	kreg, kdup, kconf := 0, 0, 0
+	var d Metric
 	for hash, records := range sorted {
 		for _, rec := range records {
+			// select {
+			// case <-ctx.Done():
+			// 	return xerrors.Errorf("context: %w", ctx.Err())
+			// default:
+			// }
+			n := time.Now()
+			stdout.Flush()
 			db.index[rec.TargetPath()] = struct{}{}
 			// will probably be overwritten if hash conflicts or duplicates...
 			newPath := path.Join(*storage, SortedFolder, rec.Path)
 			if old, ok := db.contents[hash]; ok {
-				if eq, err := CompareGroup(old.Path, newPath); err != nil {
+				if eq, err := CompareGroup(old.Paths[0], newPath); err != nil {
 					sl.Errorf("Error processing sorted: %#v", err)
 				} else if eq {
-					sl.Errorf("Duplicate: %s, %s", old.Path, newPath)
+					kdup++
+					old.Paths = append(old.Paths, newPath)
+					sl.Errorf("Duplicate: %q, %q", old.Paths[0], newPath)
 				} else {
-					sl.Errorf("Hash conflict: %s, %s", old.Path, newPath)
+					kconf++
+					sl.Errorf("Hash conflict: %q, %q", old.Paths[0], newPath)
 				}
 				continue
 			}
-			db.contents[hash] = Record{
+			kreg++
+			d.Add(float64(time.Since(n).Milliseconds()))
+			fmt.Fprintf(stdout, "Total:\t%10d | reg:\t%10d | dup\t%10d | con\t%10d | avg time %2.3f\r",
+				known, kreg, kdup, kconf, d.Avg()/1000.0)
+			sl.Infof("Register: %q", newPath)
+			db.contents[hash] = &Record{
 				Hash:      hash,
-				Path:      newPath,
+				Paths:     []string{newPath},
 				Camera:    rec.Camera,
 				Timestamp: rec.Timestamp,
 				Sorted:    true,
 			}
 		}
 	}
+	fmt.Fprintf(stdout, "Total:\t%10d | reg:\t%10d | dup\t%10d | con\t%10d\n",
+		known, kreg, kdup, kconf)
+	stdout.Flush()
 
 	//counters
-	total, newfiles, removed, duplicates, conflict := 0, 0, 0, 0, 0
+	newfiles, removed, duplicates, conflict := 0, 0, 0, 0
 
 	// process incoming files
 	for hash, files := range input {
+		select {
+		case <-ctx.Done():
+			return xerrors.Errorf("context: %w", ctx.Err())
+		default:
+		}
 		fmt.Fprintf(stdout, "Total:\t%10d | new:\t%10d | rm\t%10d | dup\t%10d | con\t%10d\r",
 			total, newfiles, removed, duplicates, conflict)
 		stdout.Flush()
-		total += len(files)
 		var filenames []string
 		for _, f := range files {
 			filenames = append(filenames, path.Join(*storage, IncomingFolder, f.Path))
@@ -176,7 +212,7 @@ func mainFunc() error {
 		if rec, ok := db.contents[hash]; ok {
 			// found
 			eq, err := CompareGroup(
-				rec.Path,
+				rec.Paths[0],
 				path.Join(*storage, IncomingFolder, file.Path))
 			if err != nil {
 				sl.Errorf("Error processing incoming: %#v", err)
@@ -235,18 +271,16 @@ func mainFunc() error {
 		Move(sl,
 			path.Join(*storage, IncomingFolder, file.Path),
 			name)
-		file.Path = name
-		db.contents[hash] = file
+		file.Paths = []string{name}
+		file.Path = ""
+		db.contents[hash] = &file
 		// do not update index here!
 	}
 	fmt.Fprintf(stdout, "Total:\t%10d | new:\t%10d | rm\t%10d | dup\t%10d | con\t%10d\n",
 		total, newfiles, removed, duplicates, conflict)
+	stdout.Flush()
 
-	if err := db.Sync(storageFilename); err != nil {
-		return xerrors.Errorf("database: %w", err)
-	}
-
-	done <- struct{}{}
+	close(done)
 	wg.Wait()
 	return nil
 }
