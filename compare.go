@@ -2,10 +2,9 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
-
-	"golang.org/x/xerrors"
 )
 
 const chunkSize = 1024 * 100
@@ -14,11 +13,11 @@ func DeepCompareFiles(file1, file2 string) (bool, error) {
 	// check stats first
 	info1, err := os.Stat(file1)
 	if err != nil {
-		return false, xerrors.Errorf("stat %q: %w", file1, err)
+		return false, fmt.Errorf("stat %q: %w", file1, err)
 	}
 	info2, err := os.Stat(file1)
 	if err != nil {
-		return false, xerrors.Errorf("stat %q: %w", file2, err)
+		return false, fmt.Errorf("stat %q: %w", file2, err)
 	}
 	if info1.Size() != info2.Size() {
 		return false, nil
@@ -27,13 +26,13 @@ func DeepCompareFiles(file1, file2 string) (bool, error) {
 	// check contents
 	f1, err := os.Open(file1)
 	if err != nil {
-		return false, xerrors.Errorf("open %q: %w", file1, err)
+		return false, fmt.Errorf("open %q: %w", file1, err)
 	}
 	defer f1.Close()
 
 	f2, err := os.Open(file2)
 	if err != nil {
-		return false, xerrors.Errorf("open %q: %w", file2, err)
+		return false, fmt.Errorf("open %q: %w", file2, err)
 	}
 	defer f2.Close()
 
@@ -42,12 +41,12 @@ func DeepCompareFiles(file1, file2 string) (bool, error) {
 	for {
 		n1, err1 := f1.Read(b1)
 		if err1 != nil && err1 != io.EOF {
-			return false, xerrors.Errorf("read %q: %w", file1, err1)
+			return false, fmt.Errorf("read %q: %w", file1, err1)
 		}
 
 		n2, err2 := f2.Read(b2)
 		if err2 != nil && err2 != io.EOF {
-			return false, xerrors.Errorf("read %q: %w", file2, err2)
+			return false, fmt.Errorf("read %q: %w", file2, err2)
 		}
 		if n1 != n2 {
 			return false, nil
@@ -73,7 +72,7 @@ func CompareGroup(files ...string) (bool, error) {
 	// check if they're equal
 	for _, f := range files[1:] {
 		if eq, err := DeepCompareFiles(files[0], f); err != nil {
-			return false, xerrors.Errorf("compare %q, %q: %w", files[0], f, err)
+			return false, fmt.Errorf("compare %q, %q: %w", files[0], f, err)
 		} else if !eq {
 			return false, nil
 		}

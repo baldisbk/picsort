@@ -8,7 +8,6 @@ import (
 	"path"
 	"time"
 
-	"golang.org/x/xerrors"
 	"gopkg.in/yaml.v3"
 )
 
@@ -49,13 +48,13 @@ func (r *Record) TargetFile(dup int) string {
 
 type Database struct {
 	contents map[string]*Record
-	index    map[string]struct{}
+	index    map[string]map[string]struct{}
 	sorted   map[string]struct{}
 }
 
 func (db *Database) Read(filename string) error {
 	db.contents = map[string]*Record{}
-	db.index = map[string]struct{}{}
+	db.index = map[string]map[string]struct{}{}
 	db.sorted = map[string]struct{}{}
 
 	f, err := os.Open(filename)
@@ -63,17 +62,17 @@ func (db *Database) Read(filename string) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return xerrors.Errorf("open: %w", err)
+		return fmt.Errorf("open: %w", err)
 	}
 	contents, err := io.ReadAll(f)
 	if err != nil {
-		return xerrors.Errorf("read: %w", err)
+		return fmt.Errorf("read: %w", err)
 	}
 	if err := yaml.Unmarshal(contents, &db.contents); err != nil {
-		return xerrors.Errorf("unmarshal: %w", err)
+		return fmt.Errorf("unmarshal: %w", err)
 	}
 	for _, f := range db.contents {
-		db.index[f.TargetPath()] = struct{}{}
+		db.index[f.TargetPath()] = map[string]struct{}{}
 		paths := []string{}
 		if f.Path != "" {
 			paths = append(paths, f.Path)
@@ -89,6 +88,7 @@ func (db *Database) Read(filename string) error {
 		if f.Sorted {
 			for _, p := range f.Paths {
 				db.sorted[p] = struct{}{}
+				db.index[f.TargetPath()][path.Dir(p)] = struct{}{}
 			}
 		}
 	}
@@ -98,10 +98,10 @@ func (db *Database) Read(filename string) error {
 func (db *Database) Sync(filename string) error {
 	contents, err := yaml.Marshal(db.contents)
 	if err != nil {
-		return xerrors.Errorf("marshal: %w", err)
+		return fmt.Errorf("marshal: %w", err)
 	}
 	if err := os.WriteFile(filename, contents, fs.FileMode(0666)); err != nil {
-		return xerrors.Errorf("write: %w", err)
+		return fmt.Errorf("write: %w", err)
 	}
 	return nil
 }

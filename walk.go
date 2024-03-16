@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
 	"time"
-
-	"golang.org/x/xerrors"
 )
 
 func Walk(ctx context.Context, root, dir string, visited map[string]struct{}) (res map[string][]Record, num int, errs map[string]error) {
@@ -25,7 +24,7 @@ func Walk(ctx context.Context, root, dir string, visited map[string]struct{}) (r
 		default:
 		}
 		if errInp != nil {
-			errs[f] = xerrors.Errorf("input: %w", errInp)
+			errs[f] = fmt.Errorf("input: %w", errInp)
 			return nil
 		}
 		if d.IsDir() {
@@ -43,7 +42,7 @@ func Walk(ctx context.Context, root, dir string, visited map[string]struct{}) (r
 	for _, f := range files {
 		select {
 		case <-ctx.Done():
-			fmt.Println()
+			fmt.Println() // end progress
 			return
 		default:
 		}
@@ -51,25 +50,30 @@ func Walk(ctx context.Context, root, dir string, visited map[string]struct{}) (r
 		rec := Record{Path: f}
 		filename := path.Join(prefix, f)
 		cam, ts, err := ReadExif(filename)
-		if err != nil {
-			errs[f] = xerrors.Errorf("exif: %w", err)
+		switch {
+		case errors.Is(err, NotPictureErr):
+			// empty hash - drop it
+			// break
+		case err != nil:
+			errs[f] = fmt.Errorf("exif: %w", err)
 			continue
+		default:
+			rec.Camera = cam
+			rec.Timestamp = ts
+			h, err := ReadHash(filename)
+			if err != nil {
+				errs[f] = fmt.Errorf("hash: %w", err)
+				continue
+			}
+			rec.Hash = h
 		}
-		rec.Camera = cam
-		rec.Timestamp = ts
-		h, err := ReadHash(filename)
-		if err != nil {
-			errs[f] = xerrors.Errorf("hash: %w", err)
-			continue
-		}
-		rec.Hash = h
 
-		res[h] = append(res[h], rec)
+		res[rec.Hash] = append(res[rec.Hash], rec)
 		num++
 		d.Add(float64(time.Since(n).Milliseconds()))
 		fmt.Fprintf(stdout, "Scanned:\t%10d of %10d (avg time %2.3f)\r", num, len(files), d.Avg()/1000.0)
 		stdout.Flush()
 	}
-	fmt.Println()
+	fmt.Println() // end progress
 	return
 }

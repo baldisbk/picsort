@@ -7,13 +7,14 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
-	"golang.org/x/xerrors"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 	ConflictFolder  = "Conflicts"
 	DuplicateFolder = "Duplicates"
 	TrashbinFolder  = "Trashbin"
+	NoImages        = "NoImages"
 )
 
 // Flow:
@@ -54,7 +56,7 @@ func mainFunc() error {
 	logcfg.OutputPaths = []string{"log.log"}
 	logger, err := logcfg.Build()
 	if err != nil {
-		return xerrors.Errorf("logger: %w", err)
+		return fmt.Errorf("logger: %w", err)
 	}
 	defer logger.Sync()
 	sl := logger.Sugar()
@@ -67,8 +69,8 @@ func mainFunc() error {
 	done := make(chan struct{})
 	signals := make(chan os.Signal)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		select {
 		case <-ctx.Done():
@@ -77,13 +79,12 @@ func mainFunc() error {
 			cancel()
 		}
 	}()
-	time.Sleep(10 * time.Second)
 
 	// load db
 	fmt.Fprintf(stdout, "Loading library...\n")
 	var db Database
 	if err := db.Read(storageFilename); err != nil {
-		return xerrors.Errorf("database: %w", err)
+		return fmt.Errorf("database: %w", err)
 	}
 	fmt.Fprintf(stdout, "Loaded %d entries\n", len(db.contents))
 	stdout.Flush()
@@ -109,15 +110,14 @@ func mainFunc() error {
 	kreg, kdup, kconf := 0, 0, 0
 	var d Metric
 	for hash, records := range sorted {
+		if hash == "" {
+			sl.Errorf("Empty hash in sorted")
+			continue
+		}
 		for _, rec := range records {
-			// select {
-			// case <-ctx.Done():
-			// 	return xerrors.Errorf("context: %w", ctx.Err())
-			// default:
-			// }
 			n := time.Now()
 			stdout.Flush()
-			db.index[rec.TargetPath()] = struct{}{}
+			db.index[rec.TargetPath()] = map[string]struct{}{}
 			// will probably be overwritten if hash conflicts or duplicates...
 			newPath := path.Join(*storage, SortedFolder, rec.Path)
 			if old, ok := db.contents[hash]; ok {
@@ -152,21 +152,33 @@ func mainFunc() error {
 	stdout.Flush()
 
 	//counters
-	newfiles, removed, duplicates, conflict := 0, 0, 0, 0
+	newfiles, removed, duplicates, conflict, noimage := 0, 0, 0, 0, 0
 
 	// process incoming files
 	for hash, files := range input {
 		select {
 		case <-ctx.Done():
-			return xerrors.Errorf("context: %w", ctx.Err())
+			return fmt.Errorf("context: %w", ctx.Err())
 		default:
 		}
-		fmt.Fprintf(stdout, "Total:\t%10d | new:\t%10d | rm\t%10d | dup\t%10d | con\t%10d\r",
-			total, newfiles, removed, duplicates, conflict)
+		fmt.Fprintf(stdout, "Total:\t%10d | new:\t%10d | rm\t%10d | dup\t%10d | con\t%10d | not\t%10d\r",
+			total, newfiles, removed, duplicates, conflict, noimage)
 		stdout.Flush()
 		var filenames []string
 		for _, f := range files {
 			filenames = append(filenames, path.Join(*storage, IncomingFolder, f.Path))
+		}
+		if hash == "" {
+			for _, f := range files {
+				noimage++
+				sl.Infof("Not an image: %s", path.Join(*storage, IncomingFolder, f.Path))
+				if err := Move(sl,
+					path.Join(*storage, IncomingFolder, f.Path),
+					path.Join(*storage, NoImages, f.Path)); err != nil {
+					sl.Errorf("Error moving: %#v", err)
+				}
+			}
+			continue
 		}
 
 		// check equality
@@ -180,8 +192,10 @@ func mainFunc() error {
 			// move them all to Conflicts as is
 			// dont add to database:
 			// deal with them and try again
+			sl.Warnf("Conflict detected:")
 			for _, f := range files {
 				conflict++
+				sl.Warnf("\t%s", path.Join(*storage, IncomingFolder, f.Path))
 				if err := Move(sl,
 					path.Join(*storage, IncomingFolder, f.Path),
 					path.Join(*storage, ConflictFolder, f.Path)); err != nil {
@@ -193,6 +207,7 @@ func mainFunc() error {
 
 		// all are equal, and we dont keep them here
 		// remove all but first
+		sl.Infof("Duplicates with %s:", path.Join(*storage, IncomingFolder, files[0].Path))
 		for _, f := range files[1:] {
 			removed++
 			// if err := Del(sl,
@@ -200,6 +215,7 @@ func mainFunc() error {
 			// 	path.Join(*storage, IncomingFolder, f.Path)); err != nil {
 			// 	sl.Errorf("Error removing: %#v", err)
 			// }
+			sl.Infof("\t%s", path.Join(*storage, IncomingFolder, f.Path))
 			if err := Move(sl,
 				path.Join(*storage, IncomingFolder, f.Path),
 				path.Join(*storage, TrashbinFolder, f.Path)); err != nil {
@@ -226,6 +242,10 @@ func mainFunc() error {
 				// 	path.Join(*storage, IncomingFolder, file.Path)); err != nil {
 				// 	sl.Errorf("Error removing: %#v", err)
 				// }
+				sl.Infof("Duplicate:\n\tcurrently moving %s\npreviously moved %s",
+					path.Join(*storage, IncomingFolder, file.Path),
+					rec.Paths[0],
+				)
 				if err := Move(sl,
 					path.Join(*storage, IncomingFolder, file.Path),
 					path.Join(*storage, TrashbinFolder, file.Path)); err != nil {
@@ -235,6 +255,10 @@ func mainFunc() error {
 			}
 			// hash conflict
 			conflict++
+			sl.Warnf("Conflict:\n\tcurrently moving %s\npreviously moved %s",
+				path.Join(*storage, IncomingFolder, file.Path),
+				rec.Paths[0],
+			)
 			if err := Move(sl,
 				path.Join(*storage, IncomingFolder, file.Path),
 				path.Join(*storage, ConflictFolder, file.Path)); err != nil {
@@ -244,9 +268,19 @@ func mainFunc() error {
 		}
 
 		// check target directory
-		if _, ok := db.index[file.TargetPath()]; ok {
+		if paths, ok := db.index[file.TargetPath()]; ok {
 			// directory seen - move to duplicates
 			duplicates++
+			var p []string
+			for path := range paths {
+				p = append(p, path)
+			}
+			slices.Sort(p)
+			sl.Infof("Folder %s already found at %s\n\tpotential duplicate %s",
+				file.TargetPath(),
+				strings.Join(p, ", "),
+				path.Join(*storage, IncomingFolder, file.Path),
+			)
 			if err := Move(sl,
 				path.Join(*storage, IncomingFolder, file.Path),
 				path.Join(*storage, DuplicateFolder, file.Path)); err != nil {
@@ -268,6 +302,7 @@ func mainFunc() error {
 			dup++
 		}
 		newfiles++
+		sl.Infof("New file %s", name)
 		Move(sl,
 			path.Join(*storage, IncomingFolder, file.Path),
 			name)
@@ -276,8 +311,8 @@ func mainFunc() error {
 		db.contents[hash] = &file
 		// do not update index here!
 	}
-	fmt.Fprintf(stdout, "Total:\t%10d | new:\t%10d | rm\t%10d | dup\t%10d | con\t%10d\n",
-		total, newfiles, removed, duplicates, conflict)
+	fmt.Fprintf(stdout, "Total:\t%10d | new:\t%10d | rm\t%10d | dup\t%10d | con\t%10d | not\t%10d\r",
+		total, newfiles, removed, duplicates, conflict, noimage)
 	stdout.Flush()
 
 	close(done)

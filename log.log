@@ -1,0 +1,56 @@
+2024-01-28T20:20:09.812+0300	ERROR	picsort/main.go:99	Error reading incoming .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:99
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:20:09.904+0300	ERROR	picsort/main.go:103	Error reading sorted .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:103
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:30:22.374+0300	ERROR	picsort/main.go:99	Error reading incoming .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:99
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:30:22.471+0300	ERROR	picsort/main.go:103	Error reading sorted .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:103
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:31:13.836+0300	ERROR	picsort/main.go:99	Error reading incoming .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:99
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:31:13.974+0300	ERROR	picsort/main.go:103	Error reading sorted .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:103
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:31:34.273+0300	ERROR	picsort/main.go:100	Error reading incoming .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:100
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
+2024-01-28T20:31:34.397+0300	ERROR	picsort/main.go:104	Error reading sorted .: input: CreateFile .: The system cannot find the file specified.
+main.mainFunc
+	C:/Projects/picsort/main.go:104
+main.main
+	C:/Projects/picsort/main.go:37
+runtime.main
+	C:/Program Files/Go/src/runtime/proc.go:267
